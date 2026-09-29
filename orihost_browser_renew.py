@@ -356,10 +356,121 @@ def cookie_login(sb, auth_raw: str) -> bool:
     return True
 
 
+# ---------- API 预检（合并自 orihost_renew.py） ----------
+def _get_session(auth_raw: str):
+    """用 remember token 置换 session + XSRF，返回 (session, xsrf)"""
+    import requests as req_lib
+
+    kind = "raw"
+    v = (auth_raw or "").strip()
+    if "remember_web" in v and (";" in v or "XSRF-TOKEN" in v or "jexactyl_session" in v):
+        kind = "full"
+    elif "=" in v and "remember_web" in v:
+        kind = "pair"
+
+    s = req_lib.Session()
+    if PROXY_STR:
+        s.proxies.update({"http": PROXY_STR, "https": PROXY_STR})
+
+    if kind == "full":
+        for item in v.split(";"):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            k, val = item.split("=", 1)
+            k, val = k.strip(), val.strip()
+            if not k or k.lower() in ("path", "expires", "domain", "max-age", "samesite", "secure", "httponly"):
+                continue
+            try:
+                val = unquote(val)
+            except Exception:
+                pass
+            s.cookies.set(k, val, domain="panel.orihost.com")
+    elif kind == "pair":
+        name, val = v.split("=", 1)
+        s.cookies.set(name.strip(), val.strip(), domain="panel.orihost.com")
+    else:
+        s.cookies.set(DEFAULT_REMEMBER_NAME, v, domain="panel.orihost.com")
+
+    for _ in range(5):
+        try:
+            s.get(f"{PANEL}/dashboard", timeout=20)
+            xsrf = s.cookies.get("XSRF-TOKEN")
+            if xsrf:
+                return s, unquote(xsrf)
+            time.sleep(2)
+        except Exception:
+            time.sleep(2)
+    return None, None
+
+
+def api_get_info(s, xsrf: str, server_uuid: str):
+    """查续期次数与到期天数，返回 (renewal, days, expires_at)"""
+    h = {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": f"{PANEL}/server/{short_id(server_uuid)}",
+    }
+    if xsrf:
+        h["X-XSRF-TOKEN"] = xsrf
+    for ident in (server_uuid, short_id(server_uuid)):
+        try:
+            r = s.get(f"{PANEL}/api/client/servers/{ident}", headers=h, timeout=20)
+            if not r.ok:
+                continue
+            attrs = r.json().get("attributes", {})
+            renewal = int(attrs.get("renewal", 0) or 0)
+            exp = attrs.get("expires_at", "")
+            days = None
+            if exp:
+                try:
+                    dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+                    days = round((dt - datetime.now(timezone.utc)).total_seconds() / 86400, 1)
+                except Exception:
+                    pass
+            return renewal, days, exp
+        except Exception:
+            continue
+    return None, None, ""
+
+
+def api_check_cooldown(s, xsrf: str, server_uuid: str) -> int:
+    """查冷却秒数"""
+    h = {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if xsrf:
+        h["X-XSRF-TOKEN"] = xsrf
+    try:
+        r = s.get(f"{PANEL}/api/client/servers/{server_uuid}/renew/cooldown", headers=h, timeout=15)
+        if r.ok:
+            return int(r.json().get("seconds", 0) or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def short_id(uuid: str) -> str:
+    return (uuid or "").strip().split("-")[0][:8]
+
+
 # ---------- 单台续期 ----------
-def renew_one_server(sb, server_uuid: str) -> dict:
-    sid = (server_uuid or "").split("-")[0][:8]
+def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
+    sid = short_id(server_uuid)
     print(f"\n  🖥 [{sid}] 打开服务器页...")
+
+    # API 预检：满额/冷却直接跳过，不开浏览器
+    if precheck:
+        renewal, days, expires_at = precheck.get("info", (None, None, ""))
+        cooldown = precheck.get("cooldown", 0)
+        if renewal is not None and renewal >= 21:
+            return {"status": "⏭️ 跳过", "message": f"续期 {renewal}/21 已满", "expires_at": expires_at}
+        if cooldown > 300:
+            return {"status": "⏭️ 跳过", "message": f"冷却中 {cooldown}s，本轮跳过", "expires_at": expires_at}
+        if days is not None:
+            print(f"  📅 预检: 续期 {renewal} / 剩余 {days} 天")
+
     # 面板路由用的是 8 位短 ID（如 /server/8651e616），填了完整 UUID 也只取前 8 位
     sb.open(f"{PANEL}/server/{sid}")
     time.sleep(8)
@@ -459,7 +570,15 @@ def renew_one_server(sb, server_uuid: str) -> dict:
         ss_path = f"renew_success_{sid}.png"
         sb.save_screenshot(ss_path)
         print(f"  📸 截图: {ss_path}")
-        return {"status": "✅ 续期成功", "message": "Claim 成功（页面确认）", "screenshot": ss_path, "expires_at": ""}
+        after_exp = ""
+        if precheck and precheck.get("api_session"):
+            try:
+                _, _, exp = api_get_info(precheck["api_session"], precheck["api_xsrf"], server_uuid)
+                if exp:
+                    after_exp = exp[:10]
+            except Exception:
+                pass
+        return {"status": "✅ 续期成功", "message": "Claim 成功（页面确认）", "screenshot": ss_path, "expires_at": after_exp, "after_exp": after_exp}
     if "captcha" in src and "complete" in src:
         return {"status": "❌ 续期失败", "message": "提交后仍提示先完成验证"}
     sb.save_screenshot(f"claim_unknown_{sid}.png")
@@ -517,9 +636,17 @@ def main():
                     results.append(info)
                     send_tg(fmt_msg(info["status"], label, sv, info["message"]))
                 continue
+
+            # API 预检：满额/冷却直接跳过，不开浏览器
+            api_session, api_xsrf = _get_session(acc["auth"])
             for sv in acc["servers"]:
+                precheck = None
+                if api_session and api_xsrf:
+                    info = api_get_info(api_session, api_xsrf, sv)
+                    cd = api_check_cooldown(api_session, api_xsrf, sv)
+                    precheck = {"info": info, "cooldown": cd, "api_session": api_session, "api_xsrf": api_xsrf}
                 try:
-                    r = renew_one_server(sb, sv)
+                    r = renew_one_server(sb, sv, precheck)
                 except Exception as e:
                     r = {"status": "❌ 续期失败", "message": f"异常: {str(e)[:120]}"}
                 info = {"label": label, "server": sv, "status": r["status"], "message": r.get("message", "")}

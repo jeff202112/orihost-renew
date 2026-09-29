@@ -7,10 +7,9 @@
 
 ```text
 orihost-renew/
-├── orihost_browser_renew.py    # 主力：浏览器自动续期（Cookie免登+读文章+Turnstile+Claim）
-├── orihost_renew.py            # 备用：纯 API 版（仅满额检测/诊断，claim 通不过验证）
-├── requirements.txt            # 依赖：curl_cffi + requests + seleniumbase
-├── .github/workflows/renew.yml# GitHub Actions 定时任务（每 3 天 + 手动触发）
+├── orihost_browser_renew.py    # 唯一脚本：API预检 + 浏览器续期（Cookie免登+读文章+Turnstile+Claim）
+├── requirements.txt            # 依赖：seleniumbase + requests
+├── .github/workflows/renew-browser.yml  # GitHub Actions 定时任务（每 3 天 + cron自我调度）
 └── README.md                   # 本说明文件
 ```
 
@@ -91,7 +90,7 @@ https://panel.orihost.com/server/8651e616
 pip install -r requirements.txt
 set ORIHOST_REMEMBER=你的remember值
 set ORIHOST_SERVER_IDS=你的服务器短ID
-python orihost_renew.py
+python orihost_browser_renew.py
 ```
 
 多台 / TG / 代理（cmd 示例）：
@@ -101,7 +100,7 @@ set ORIHOST_SERVER_IDS=id1,id2
 set TG_BOT_TOKEN=123:abc
 set TG_CHAT_ID=123456789
 set ORIHOST_PROXY=http://127.0.0.1:7890
-python orihost_renew.py
+python orihost_browser_renew.py
 ```
 
 本地没有 sing-box 步骤，`NODE_LINK` 只在 Actions 里生效；本地要走代理请填 `ORIHOST_PROXY`（需是本机能连上的 http/socks 代理）。
@@ -110,9 +109,9 @@ python orihost_renew.py
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `RENEWAL_MAX` | `21` | 单台续期次数上限，满了自动跳过 |
-| `MAX_ATTEMPTS` | `5` | 单台单轮最多 begin/complete 次数 |
-| `DWELL_EXTRA` | `2` | 阅读等待额外加秒（防风控） |
+| `ORIHOST_EMAIL` | 空 | 邮箱，TG 通知中脱敏显示账号 |
+| `GH_TOKEN` | 空 | 带 `repo`+`workflow` 的 classic PAT，cron 回写推 workflow 文件用 |
+| `ARTICLE_WAIT` | `30` | 文章页停留秒数 |
 | `TG_BOT` | 空 | 兼容写法 `chat_id,token`，与 `TG_BOT_TOKEN/TG_CHAT_ID` 二选一 |
 | `ORIHOST_GOST_PROXY` | 空 | 与 `ORIHOST_PROXY` 同效 |
 

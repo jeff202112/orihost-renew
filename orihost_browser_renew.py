@@ -530,6 +530,11 @@ def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
     renew_btn = find_button_by_text(sb, "renew now", "renew", "更新", "续期", timeout=20)
     if renew_btn is None:
         sb.save_screenshot(f"no_renew_btn_{sid}.png")
+        try:
+            src = sb.get_page_source() or ""
+            print(f"  🔍 页面源码前500字符: {src[:500]}")
+        except Exception:
+            pass
         return {"status": "❌ 续期失败", "message": "没找到 Renew Now 按钮（页面结构可能变了）"}
     try:
         renew_btn.click()

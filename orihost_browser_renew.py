@@ -338,21 +338,32 @@ _REMOVE_ADS_JS = """
 
 
 def remove_ads(sb):
-    """移除广告 iframe 和覆盖层"""
+    """移除广告 iframe 和覆盖层，点击关闭按钮"""
     try:
         sb.execute_script(_REMOVE_ADS_JS)
     except Exception:
         pass
+    # 点击广告关闭按钮（"要關閉" / "关闭" / "Close"）
+    for el in sb.find_elements("span") + sb.find_elements("button") + sb.find_elements("a"):
+        try:
+            txt = (el.text or "").strip()
+            if txt in ("要關閉", "关闭", "Close", "✕", "×"):
+                el.click()
+                print("  🚫 关闭广告弹窗")
+                time.sleep(1)
+                break
+        except Exception:
+            continue
 
 
 # ---------- 页面工具（文本匹配按钮，面板是 React，文本最稳） ----------
 def find_button_by_text(sb, *keywords, timeout=10):
-    """在 button 和 a 里找文本包含关键词的第一个可见元素"""
+    """在 button、a、div 里找文本包含关键词的第一个可见元素"""
     end = time.time() + timeout
     kws = [k.lower() for k in keywords]
     while time.time() < end:
         try:
-            for el in sb.find_elements("button") + sb.find_elements("a"):
+            for el in sb.find_elements("button") + sb.find_elements("a") + sb.find_elements("div"):
                 try:
                     if not el.is_displayed():
                         continue

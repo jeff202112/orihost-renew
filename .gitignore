@@ -1,0 +1,5 @@
+__pycache__/
+agentscribe/
+*.png
+storage-state*.json
+slim-storage-state.json

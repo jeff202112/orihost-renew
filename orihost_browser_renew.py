@@ -303,6 +303,48 @@ def handle_turnstile(sb) -> bool:
     return False
 
 
+# ---------- 广告拦截（CI 环境广告 iframe 可能遮挡按钮） ----------
+_REMOVE_ADS_JS = """
+(function() {
+    // 移除广告 iframe
+    document.querySelectorAll('iframe').forEach(function(f) {
+        var src = f.src || '';
+        if (src.includes('n6wxm.com') || src.includes('nap5k.com') || 
+            src.includes('5gvci.com') || src.includes('jhnwr.com') ||
+            src.includes('my.rtmark.net') || src.includes('vignette') ||
+            src.includes('tag.min.js') || src.includes('ad') ||
+            src.includes('advert') || src.includes('popup') ||
+            src.includes('overlay') || src.includes('modal')) {
+            f.remove();
+        }
+    });
+    // 移除固定定位的广告覆盖层
+    document.querySelectorAll('div').forEach(function(d) {
+        var s = window.getComputedStyle(d);
+        if ((s.position === 'fixed' || s.position === 'absolute') && 
+            s.zIndex > 100 && d.offsetHeight > 100) {
+            var text = d.innerText || '';
+            if (text.includes('ad') || text.includes('广告') || 
+                text.includes('close') || text.includes('关闭') ||
+                text.includes('✕') || text.includes('×') ||
+                d.innerHTML.includes('iframe')) {
+                d.remove();
+            }
+        }
+    });
+    return 'done';
+})()
+"""
+
+
+def remove_ads(sb):
+    """移除广告 iframe 和覆盖层"""
+    try:
+        sb.execute_script(_REMOVE_ADS_JS)
+    except Exception:
+        pass
+
+
 # ---------- 页面工具（文本匹配按钮，面板是 React，文本最稳） ----------
 def find_button_by_text(sb, *keywords, timeout=10):
     """在 button 和 a 里找文本包含关键词的第一个可见元素"""
@@ -483,6 +525,8 @@ def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
 
     # 1. 点 Renew Now（兼容 Google 翻译后的中文文案）
     print("  🔍 找 Renew Now 按钮...")
+    remove_ads(sb)
+    time.sleep(1)
     renew_btn = find_button_by_text(sb, "renew now", "renew", "更新", "续期", timeout=20)
     if renew_btn is None:
         sb.save_screenshot(f"no_renew_btn_{sid}.png")

@@ -516,6 +516,11 @@ def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
     # 面板路由用的是 8 位短 ID（如 /server/8651e616），填了完整 UUID 也只取前 8 位
     sb.open(f"{PANEL}/server/{sid}")
     time.sleep(8)
+    try:
+        sb.wait_for_ready_state_complete(timeout=20)
+    except Exception:
+        pass
+    time.sleep(3)
 
     src = page_text(sb)
     if "renew limit reached" in src:

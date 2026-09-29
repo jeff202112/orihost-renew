@@ -53,21 +53,121 @@ if (not TG_BOT_TOKEN or not TG_CHAT_ID) and os.environ.get("TG_BOT"):
         pass
 
 
-def send_tg(msg: str):
+ORIHOST_EMAIL = os.environ.get("ORIHOST_EMAIL") or ""
+
+
+def mask_email(email: str) -> str:
+    if "@" in email:
+        name, domain = email.split("@", 1)
+        if len(name) > 4:
+            return f"{name[:2]}****{name[-2:]}@{domain}"
+        return f"{name}@{domain}"
+    return email[:2] + "****"
+
+
+def send_tg(msg: str, screenshot_path: str = ""):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         return
     try:
-        tg_lib.post(
-            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
-            timeout=15,
-        )
+        if screenshot_path and os.path.exists(screenshot_path):
+            with open(screenshot_path, "rb") as f:
+                img_data = f.read()
+            boundary = f"----Boundary{abs(hash(msg))}"
+            body_parts = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+                f"{TG_CHAT_ID}\r\n"
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="caption"\r\n\r\n'
+                f"{msg}\r\n"
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="photo"; filename="s.png"\r\n'
+                f"Content-Type: image/png\r\n\r\n"
+            ).encode() + img_data + f"\r\n--{boundary}--\r\n".encode()
+            tg_lib.post(
+                f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto",
+                data=body_parts,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                timeout=30,
+            )
+        else:
+            tg_lib.post(
+                f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"},
+                timeout=15,
+            )
     except Exception as e:
         print(f"  TG 发送失败: {e}")
 
 
 def now_bj():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ---------- cron 自我调度（参考 oyz/FreezeHost） ----------
+def updateCronSchedule(after_expires_at: str):
+    """续期成功后按 expires_at-1天 改写 renew.yml 的 cron 为一次性定时并 push"""
+    import subprocess
+
+    if os.environ.get("DRY_RUN", "").lower() == "true":
+        print("  ℹ️ DRY_RUN 演练，跳过 cron 回写")
+        return False
+    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        print("  ℹ️ 非 CI 环境，跳过 cron 回写")
+        return False
+
+    gh_token = os.environ.get("GH_TOKEN", "")
+    if not gh_token:
+        print("  ℹ️ 未提供 GH_TOKEN，跳过 cron 回写")
+        return False
+
+    try:
+        from datetime import datetime as dt
+        t = dt.fromisoformat(after_expires_at.replace("Z", "+00:00"))
+        next_run = t - timedelta(days=1)
+        if next_run.timestamp() <= datetime.now(timezone.utc).timestamp():
+            next_run = datetime.now(timezone.utc) + timedelta(hours=12)
+
+        p2 = lambda n: str(n).zfill(2)
+        new_cron = f"10 10 {next_run.day} {next_run.month} *"
+        next_str = f"{next_run.year}-{p2(next_run.month)}-{p2(next_run.day)} {p2(next_run.hour)}:{p2(next_run.minute)}"
+
+        wf = os.path.join(os.getcwd(), ".github", "workflows", "renew-browser.yml")
+        if not os.path.exists(wf):
+            wf = os.path.join(os.getcwd(), ".github", "workflows", "renew.yml")
+        if not os.path.exists(wf):
+            print("  ⚠️ 未找到 workflow 文件，跳过 cron 回写")
+            return False
+
+        with open(wf, "r", encoding="utf-8") as f:
+            old = f.read()
+        import re
+        m = re.search(r"^(\s*- cron: )'[^']*'(.*)$", old, re.M)
+        if not m:
+            print("  ⚠️ renew.yml 无 cron 行，跳过 cron 回写")
+            return False
+
+        updated = old.replace(m.group(0), f"{m.group(1)}'{new_cron}'  # auto: 下一次 {next_str} UTC")
+        with open(wf, "w", encoding="utf-8") as f:
+            f.write(updated)
+
+        env = os.environ.copy()
+        env["GIT_ASKPASS"] = "echo"
+        env["GIT_USERNAME"] = "github-actions[bot]"
+        env["GIT_PASSWORD"] = gh_token
+
+        subprocess.run(["git", "pull", "--rebase"], env=env, capture_output=True, timeout=30)
+        subprocess.run(["git", "add", wf], env=env, capture_output=True, timeout=10)
+        subprocess.run(
+            ["git", "commit", "-m", "自动调整下次续期时间", "-m", f"下次运行: {next_str} UTC"],
+            env=env, capture_output=True, timeout=10,
+        )
+        subprocess.run(["git", "push"], env=env, capture_output=True, timeout=30)
+        print(f"  ✅ cron 已回写: {new_cron}（下一次 {next_str} UTC）")
+        return True
+    except Exception as e:
+        print(f"  ⚠️ cron 回写失败: {e}")
+        return False
 
 
 # ---------- 账号解析（与 orihost_renew.py 同一套变量名） ----------
@@ -270,9 +370,9 @@ def renew_one_server(sb, server_uuid: str) -> dict:
     if "expired renewal" in src or "suspended due" in src:
         print("  ⚠️ 服务器因过期被暂停，走续期流程恢复")
 
-    # 1. 点 Renew Now
+    # 1. 点 Renew Now（兼容 Google 翻译后的中文文案）
     print("  🔍 找 Renew Now 按钮...")
-    renew_btn = find_button_by_text(sb, "renew now", timeout=20)
+    renew_btn = find_button_by_text(sb, "renew now", "renew", "更新", "续期", timeout=20)
     if renew_btn is None:
         sb.save_screenshot(f"no_renew_btn_{sid}.png")
         return {"status": "❌ 续期失败", "message": "没找到 Renew Now 按钮（页面结构可能变了）"}
@@ -282,9 +382,9 @@ def renew_one_server(sb, server_uuid: str) -> dict:
         sb.execute_script("arguments[0].click();", renew_btn)
     time.sleep(4)
 
-    # 2. 点 Read Article（会弹新标签）
+    # 2. 点 Read Article（会弹新标签，兼容翻译后的中文文案）
     print("  🖱️ 点 Read Article...")
-    read_btn = find_button_by_text(sb, "read article", timeout=15)
+    read_btn = find_button_by_text(sb, "read article", "read", "阅读文章", "阅读", timeout=15)
     if read_btn is None:
         # 可能已经在 reading 状态（倒计时中），直接往下走
         print("  ℹ️ 没找到 Read Article，可能已在倒计时，直接等待")
@@ -312,9 +412,9 @@ def renew_one_server(sb, server_uuid: str) -> dict:
         sb.driver.switch_to.window(list(before)[0])
         time.sleep(4)
 
-    # 3. 等倒计时走完（Claim 按钮出现）
+    # 3. 等倒计时走完（Claim 按钮出现，兼容翻译后的中文文案）
     print("  ⏳ 等倒计时走完，找 Claim Renewal...")
-    claim_btn = find_button_by_text(sb, "claim renewal", timeout=120)
+    claim_btn = find_button_by_text(sb, "claim renewal", "claim", "认领", "领取", timeout=120)
     if claim_btn is None:
         sb.save_screenshot(f"no_claim_btn_{sid}.png")
         return {"status": "❌ 续期失败", "message": "120s 没等到 Claim Renewal（倒计时异常）"}
@@ -336,7 +436,7 @@ def renew_one_server(sb, server_uuid: str) -> dict:
     claimed = False
     for _ in range(60):
         try:
-            btns = [el for el in sb.find_elements("button") if el.is_displayed() and "claim renewal" in (el.text or "").lower()]
+            btns = [el for el in sb.find_elements("button") if el.is_displayed() and any(k in (el.text or "").lower() for k in ("claim renewal", "claim", "认领", "领取"))]
             if btns and btns[0].is_enabled():
                 try:
                     btns[0].click()
@@ -356,16 +456,30 @@ def renew_one_server(sb, server_uuid: str) -> dict:
     if "renew limit reached" in src:
         return {"status": "⏭️ 跳过", "message": "已达续期上限（Renew Limit Reached）"}
     if any(k in src for k in ("renewed", "successfully renewed", "renewal successful", "extended")):
-        return {"status": "✅ 续期成功", "message": "Claim 成功（页面确认）"}
+        ss_path = f"renew_success_{sid}.png"
+        sb.save_screenshot(ss_path)
+        print(f"  📸 截图: {ss_path}")
+        return {"status": "✅ 续期成功", "message": "Claim 成功（页面确认）", "screenshot": ss_path, "expires_at": ""}
     if "captcha" in src and "complete" in src:
         return {"status": "❌ 续期失败", "message": "提交后仍提示先完成验证"}
     sb.save_screenshot(f"claim_unknown_{sid}.png")
     return {"status": "⚠️ 未知结果", "message": "已点 Claim，但没读到明确成功提示，请人工看一眼面板"}
 
 
-def fmt_msg(status, label, server_uuid, detail):
+def fmt_msg(status, label, server_uuid, detail, before_exp="", after_exp=""):
     sid = (server_uuid or "").split("-")[0][:8]
-    return f"🖥 Orihost 浏览器续期\n{status}\n👤 {label}\n🆔 {sid}\n📌 {detail}\n⏰ {now_bj()}（北京）"
+    lines = ["🎰 Orihost 续期报告", "", status]
+    if ORIHOST_EMAIL:
+        lines.append(f"📧 账号: {mask_email(ORIHOST_EMAIL)}")
+    lines.append(f"🆔 服务器: {sid}")
+    if before_exp:
+        lines.append(f"⏱ 续期前到期时间: {before_exp}")
+    if after_exp:
+        lines.append(f"⏱ 续期后到期时间: {after_exp}")
+    if detail:
+        lines.append(f"📌 {detail}")
+    lines.append(f"⏰ {now_bj()}")
+    return "\n".join(lines)
 
 
 # ---------- 主入口 ----------
@@ -411,7 +525,10 @@ def main():
                 info = {"label": label, "server": sv, "status": r["status"], "message": r.get("message", "")}
                 results.append(info)
                 print(f"  {info['status']} {info['message']}")
-                send_tg(fmt_msg(info["status"], label, sv, info["message"]))
+                ss = r.get("screenshot", "")
+                send_tg(fmt_msg(info["status"], label, sv, info["message"], r.get("before_exp", ""), r.get("after_exp", "")), ss)
+                if "成功" in r["status"] and r.get("expires_at"):
+                    updateCronSchedule(r["expires_at"])
                 time.sleep(random.randint(2, 5))
 
     ok = sum(1 for r in results if "成功" in r["status"])

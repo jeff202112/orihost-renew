@@ -595,11 +595,17 @@ def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
         sb.save_screenshot(f"no_claim_btn_{sid}.png")
         return {"status": "❌ 续期失败", "message": "120s 没等到 Claim Renewal（倒计时异常）"}
 
-    # 4. 过 Turnstile（有才点，没有就跳过）
-    try:
-        has_ts = sb.execute_script(_HAS_TURNSTILE_JS)
-    except Exception:
-        has_ts = False
+    # 4. 等 Turnstile 出现（倒计时走完后才弹出）
+    print("  ⏳ 等 Turnstile 验证出现...")
+    has_ts = False
+    for _ in range(30):
+        try:
+            if sb.execute_script(_HAS_TURNSTILE_JS):
+                has_ts = True
+                break
+        except Exception:
+            pass
+        time.sleep(1)
     if has_ts:
         if not handle_turnstile(sb):
             sb.save_screenshot(f"turnstile_fail_{sid}.png")
@@ -607,17 +613,14 @@ def renew_one_server(sb, server_uuid: str, precheck=None) -> dict:
     else:
         print("  ℹ️ 未检测到验证组件")
 
-    # 5. 点 Claim Renewal（等它从 disabled 变可点）
+    # 5. 点 Claim Renewal（用 JS 点击避免被遮挡）
     print("  🖱️ 点 Claim Renewal...")
     claimed = False
-    for _ in range(60):
+    for _ in range(30):
         try:
             btns = [el for el in sb.find_elements("button") if el.is_displayed() and any(k in (el.text or "").lower() for k in ("claim renewal", "claim", "认领", "领取"))]
             if btns and btns[0].is_enabled():
-                try:
-                    btns[0].click()
-                except Exception:
-                    sb.execute_script("arguments[0].click();", btns[0])
+                sb.execute_script("arguments[0].click();", btns[0])
                 claimed = True
                 break
         except Exception:

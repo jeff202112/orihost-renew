@@ -22,7 +22,7 @@ orihost-renew/
 3. 倒计时走完出 Cloudflare Turnstile，必须点过验证，`Claim Renewal` 按钮才可点
 4. 点 `Claim Renewal` → `GET /api/client/renewal/complete?cf-turnstile-response=xxx` 完成续期（+7 天）
 
-结论：`complete` 强制要 Turnstile token，无 token 直接 500，所以主力跑**浏览器版**（真浏览器点验证，移植自 katabump 的过盾方案）；纯 API 版保留作满额检测和诊断用。
+结论：`complete` 强制要 Turnstile token，无 token 直接 500，所以必须跑**浏览器版**（真浏览器点验证，移植自 katabump 的过盾方案）。
 
 ## 一、获取 remember token（填的是令牌，不是邮箱密码）
 
@@ -54,7 +54,7 @@ https://panel.orihost.com/server/8651e616
 
 ## 三、GitHub Actions 部署（推荐）
 
-1. 新建仓库，把本目录文件推上去（保持 `orihost_renew.py` 在仓库根目录）
+1. 新建仓库，把本目录文件推上去（保持 `orihost_browser_renew.py` 在仓库根目录）
 2. 进仓库 `Settings → Secrets and variables → Actions`，点 `Secrets` 页签 → `New repository secret`，按下表逐个建（保存后值不可见是正常的）：
 
    名字必须一字不差（大写+下划线），所有变量全部建在 `Secrets` 下。完整对照表：
@@ -70,7 +70,7 @@ https://panel.orihost.com/server/8651e616
 
 代理说明：直连优先。`NODE_LINK` 由工作流的 sing-box 步骤自动转成本地代理（`vless://` 这类链接只能填这里）；`ORIHOST_PROXY` 只接受 `http://` / `socks5://` 开头的代理地址。
 
-3. 去 `Actions → Orihost Auto Renew → Run workflow` 手动跑一次，TG 能收到推送即正常
+3. 去 `Actions → Orihost Browser Renew → Run workflow` 手动跑一次，TG 能收到推送即正常
 4. 定时默认 `0 10 */3 * *`（每 3 天，北京时间 18:00），7 天有效期提前续是故意的，不要改成 7 天
 
 ### 多账号
@@ -124,7 +124,7 @@ python orihost_browser_renew.py
 - **冷却中 xxxs 本轮跳过**：面板限流，超过 5 分钟脚本主动放弃，等 3 天后下一轮
 - **TG 收不到**：先确认 `TG_BOT_TOKEN` 与 `TG_CHAT_ID` 都填了，且机器人已和你开过会话（先给机器人发一句话）
 - **被 Cloudflare 拦截**：把节点链接填到 `NODE_LINK` 走代理，或换个时间手动重跑
-- **汇总 0 成功 0 跳过 N 失败**：看日志第一行，`curl_cffi=关` 表示依赖没装好，重跑 Install 步骤
+- **汇总 0 成功 0 跳过 N 失败**：看日志第一行，确认 `seleniumbase` 已安装，重跑 Install 步骤
 
 ## 安全提醒
 

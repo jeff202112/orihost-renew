@@ -5,8 +5,8 @@ name: Orihost Browser Renew
 # 帐号密码登录（过 Turnstile）→ Renew → Read Article（新标签读文章）→ 倒计时 → Turnstile → Claim Renewal
 on:
   schedule:
-    # 每 3 天一次，UTC 10:00 = 北京时间 18:00（7 天有效期，提前续避免删机）
-    - cron: '0 10 */3 * *'
+  # 每 5 天一次：每月 1/6/11/16/21/26 日，UTC 10:00 = 北京时间 18:00
+  - cron: '0 10 1,6,11,16,21,26 * *'
   workflow_dispatch:
 
 # 续期成功后脚本会回写本 workflow 的 cron 并 push，需要写权限

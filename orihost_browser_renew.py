@@ -1158,15 +1158,41 @@ def updateCronSchedule(after_expires_at: str):
             f.write(updated)
 
         env = os.environ.copy()
-        env["GIT_ASKPASS"] = "echo"
-        env["GIT_USERNAME"] = "github-actions[bot]"
-        env["GIT_PASSWORD"] = gh_token
+        env.setdefault("GIT_AUTHOR_NAME", "github-actions[bot]")
+        env.setdefault("GIT_AUTHOR_EMAIL", "41898282+github-actions[bot]@users.noreply.github.com")
+        env["GIT_COMMITTER_NAME"] = env["GIT_AUTHOR_NAME"]
+        env["GIT_COMMITTER_EMAIL"] = env["GIT_AUTHOR_EMAIL"]
 
-        subprocess.run(["git", "pull", "--rebase"], env=env, capture_output=True, timeout=30)
+        # 目标分支/仓库：schedule 事件下 checkout 可能处于 detached HEAD，
+        # 直接 `git push` 会报 "not currently on a branch"，所以显式 push HEAD 到分支
+        repo = os.environ.get("GITHUB_REPOSITORY", "")
+        branch = os.environ.get("GITHUB_REF_NAME", "") or os.environ.get("GITHUB_HEAD_REF", "")
+        if not branch:
+            r = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                               env=env, capture_output=True, text=True)
+            branch = r.stdout.strip()
+        if branch in ("", "HEAD"):
+            branch = "main"
+
+        # 先同步远端，减少 push 时因落后被拒的概率（失败不阻断，稍后仍尝试 push）
+        if repo:
+            subprocess.run(["git", "fetch", "origin", branch],
+                           env=env, capture_output=True, timeout=30)
+
         subprocess.run(["git", "add", wf], env=env, capture_output=True, timeout=10)
         subprocess.run(["git", "commit", "-m", "自动调整下次续期时间", "-m", f"下次运行: {next_str} UTC"],
                        env=env, capture_output=True, timeout=10)
-        subprocess.run(["git", "push"], env=env, capture_output=True, timeout=30)
+
+        if repo:
+            push_url = f"https://x-access-token:{gh_token}@github.com/{repo}.git"
+            push = subprocess.run(["git", "push", push_url, f"HEAD:refs/heads/{branch}"],
+                                  env=env, capture_output=True, text=True, timeout=30)
+        else:
+            push = subprocess.run(["git", "push", "HEAD"],
+                                  env=env, capture_output=True, text=True, timeout=30)
+        if push.returncode != 0:
+            print(f"  ⚠️ cron 已写入本地但 push 失败: {push.stderr.strip()[:300]}")
+            return False
         print(f"  ✅ cron 已回写: {new_cron}（下一次 {next_str} UTC）")
         return True
     except Exception as e:

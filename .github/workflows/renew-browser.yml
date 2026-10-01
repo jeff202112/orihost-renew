@@ -2,55 +2,91 @@ name: Orihost Browser Renew
 
 # 主力续期流（真浏览器）：
 # 纯 HTTP 调 complete 无 Turnstile token 直接 500，必须走浏览器：
-# Cookie 免登 → Renew Now → Read Article（新标签读文章）→ 倒计时 → Turnstile → Claim Renewal
+# 帐号密码登录（过 Turnstile）→ Renew → Read Article（新标签读文章）→ 倒计时 → Turnstile → Claim Renewal
 on:
   schedule:
     # 每 3 天一次，UTC 10:00 = 北京时间 18:00（7 天有效期，提前续避免删机）
     - cron: '0 10 */3 * *'
   workflow_dispatch:
 
+# 续期成功后脚本会回写本 workflow 的 cron 并 push，需要写权限
+permissions:
+  contents: write
+
 jobs:
   renew-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 显式检出分支（而非 detached HEAD），否则脚本回写 cron 时 git push 会因
+          # "not currently on a branch" 失败；用 PAT 作为凭据让 push 能触发后续 workflow
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GH_TOKEN || github.token }}
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+
       - name: Install dependencies
         run: |
-          pip install seleniumbase
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # GitHub runner 自带 google-chrome，脚本会优先用它；这里再保证有 Chrome for Testing 兜底
+          python -m playwright install --with-deps chromium
+          # xvfb 用于有头浏览器（过 Cloudflare Turnstile 必需）
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: ⚙ 设置代理 (sing-box)
         continue-on-error: true
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+
       - name: Run browser renew (xvfb)
         env:
-          ORIHOST_REMEMBER: ${{ secrets.ORIHOST_REMEMBER }}
+          # 帐号密码：单账号用不带后缀的；多账号加 _1 / _2 / _3 …
+          ORIHOST_EMAIL: ${{ secrets.ORIHOST_EMAIL }}
+          ORIHOST_PASSWORD: ${{ secrets.ORIHOST_PASSWORD }}
+          ORIHOST_EMAIL_1: ${{ secrets.ORIHOST_EMAIL_1 }}
+          ORIHOST_PASSWORD_1: ${{ secrets.ORIHOST_PASSWORD_1 }}
+          ORIHOST_EMAIL_2: ${{ secrets.ORIHOST_EMAIL_2 }}
+          ORIHOST_PASSWORD_2: ${{ secrets.ORIHOST_PASSWORD_2 }}
+          ORIHOST_EMAIL_3: ${{ secrets.ORIHOST_EMAIL_3 }}
+          ORIHOST_PASSWORD_3: ${{ secrets.ORIHOST_PASSWORD_3 }}
+          # 服务器短 ID（逗号分隔）。不填则自动续该账号下所有服务器
           ORIHOST_SERVER_IDS: ${{ secrets.ORIHOST_SERVER_IDS }}
-          ORIHOST_REMEMBER_1: ${{ secrets.ORIHOST_REMEMBER_1 }}
           ORIHOST_SERVER_IDS_1: ${{ secrets.ORIHOST_SERVER_IDS_1 }}
-          ORIHOST_REMEMBER_2: ${{ secrets.ORIHOST_REMEMBER_2 }}
           ORIHOST_SERVER_IDS_2: ${{ secrets.ORIHOST_SERVER_IDS_2 }}
-          ORIHOST_REMEMBER_3: ${{ secrets.ORIHOST_REMEMBER_3 }}
           ORIHOST_SERVER_IDS_3: ${{ secrets.ORIHOST_SERVER_IDS_3 }}
-          # 兼容旧变量名（完整 Cookie 串）
-          ORIHOST_COOKIE: ${{ secrets.ORIHOST_COOKIE }}
-          ORIHOST_COOKIE_1: ${{ secrets.ORIHOST_COOKIE_1 }}
+          # 也可用一条 JSON Secret 代替上面所有 EMAIL/PASSWORD：
+          # [{"email":"a@b.com","password":"pwd","servers":"id1,id2"}]
+          ORIHOST_ACCOUNTS: ${{ secrets.ORIHOST_ACCOUNTS }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ORIHOST_PROXY: ${{ secrets.ORIHOST_PROXY }}
-          ARTICLE_WAIT: '30'
-          CLAIM_TIMEOUT: '150'
-        run: xvfb-run -a python orihost_browser_renew.py
+          # 带 repo+workflow 的 classic PAT：续期成功后回写 workflow 的 cron（不填则跳过，用固定定时）
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DRY_RUN: ${{ secrets.DRY_RUN }}
+          # xvfb 下跑有头浏览器（脚本会自动找系统 Chrome，找不到才退回 Playwright 自带的）
+          HEADLESS: '0'
+          CLAIM_TIMEOUT: '180'
+          # CI 环境非特权 user namespace 受限，显式关掉 Chrome sandbox（脚本在 GITHUB_ACTIONS 下也会自动加）
+          CHROME_NO_SANDBOX: '1'
+          # 兜底：若上面 sing-box 步骤没导出 IS_PROXY/PROXY_SERVER，就把节点填进 ORIHOST_PROXY 让 Chrome 走代理
+          # （机房 IP 过 Turnstile 成功率低，强烈建议挂住宅节点）
+        run: xvfb-run -a -s "-screen 0 1440x900x24" python orihost_browser_renew.py
+
       - name: 📸 上传失败截图
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: orihost-fail-shots
-          path: '*.png'
+          path: 'shots/*.png'
           if-no-files-found: ignore

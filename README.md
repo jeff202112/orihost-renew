@@ -2,7 +2,7 @@
 
 基于 Jexactyl 面板的自动续期脚本，解决免费容器 7 天过期删机问题。
 
-**用邮箱 + 密码登录**（自动过 Cloudflare Turnstile），不再需要手动抓 `remember_web` token 或 Cookie —— 和 [katabump](https://github.com/) 的用法一致：本地放一个 `orihost_login.json`，Actions 里填 `ORIHOST_EMAIL` / `ORIHOST_PASSWORD`。
+**用邮箱 + 密码登录**（自动过 Cloudflare Turnstile），不再需要手动抓 `remember_web` token 或 Cookie —— 和 [katabump](https://github.com/) 的用法一致：本地放一个 `orihost_login.json`，Actions 里填一条 JSON Secret `ORIHOST_ACCOUNTS`（多账号就是 JSON 数组）。
 
 ## 文件结构
 
@@ -92,9 +92,7 @@ python orihost_browser_renew.py
 
 | 名称 | 必填 | 说明 |
 |---|---|---|
-| `ORIHOST_EMAIL` | 是 | 面板登录邮箱 |
-| `ORIHOST_PASSWORD` | 是 | 面板登录密码 |
-| `ORIHOST_SERVER_IDS` | 否 | 服务器短 ID，逗号分隔；不填则自动续账号下全部服务器 |
+| `ORIHOST_ACCOUNTS` | 是 | 帐号 JSON 数组，**一个 Secret 装下所有账号**（示例见下方「多账号」）；某账号要限定机器就加 `"servers":"id1,id2"` |
 | `TG_BOT_TOKEN` | 否 | Telegram 机器人 token |
 | `TG_CHAT_ID` | 否 | Telegram 聊天 ID |
 | `NODE_LINK` | 否 | 代理节点完整分享链接（vless/vmess/trojan/hysteria2/tuic/anytls/socks5），不填则直连 |
@@ -107,22 +105,25 @@ python orihost_browser_renew.py
 
 ### 多账号
 
-| 账号 | 在 Secrets 里建这几个 |
-|---|---|
-| 账号1 | `ORIHOST_EMAIL_1` + `ORIHOST_PASSWORD_1`（+ 可选 `ORIHOST_SERVER_IDS_1`） |
-| 账号2 | `ORIHOST_EMAIL_2` + `ORIHOST_PASSWORD_2`（+ 可选 `ORIHOST_SERVER_IDS_2`） |
-| 账号3 | `ORIHOST_EMAIL_3` + `ORIHOST_PASSWORD_3`（+ 可选 `ORIHOST_SERVER_IDS_3`） |
+不再需要一堆 `ORIHOST_EMAIL_1` / `ORIHOST_PASSWORD_1`：只建**一条** Secret `ORIHOST_ACCOUNTS`，值填 JSON 数组，一个账号一个对象（单账号同样用它，数组里放一个对象即可）：
 
-单账号用不带后缀的即可；多账号与单账号可混用，脚本自动汇总。
-也可以用一条 JSON Secret `ORIHOST_ACCOUNTS`：
-`[{"email":"a@b.com","password":"pwd","servers":"id1,id2"}]`
+```json
+[
+  {"email": "a@b.com", "password": "pwd"},
+  {"email": "c@d.com", "password": "pwd2"}
+]
+```
+
+- 某个账号只想续部分机器，就在它的对象里加 `"servers": "id1,id2"`（服务器短 ID，逗号分隔）；不加则自动续该账号下全部服务器
+- 把这份 JSON 直接粘进 `ORIHOST_EMAIL` 也认（老 Secret 只改值、不改名就能用）
+- 本地/环境变量仍兼容老写法：`ORIHOST_EMAIL` + `ORIHOST_PASSWORD`（可带 `_1.._N` 后缀做多账号）
 
 ## 三、环境变量全表
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `ORIHOST_EMAIL` / `ORIHOST_PASSWORD` | 空 | 面板登录帐号密码（可带 `_1.._N` 后缀做多账号） |
-| `ORIHOST_ACCOUNTS` | 空 | 帐号 JSON（与 katabump 的 `USERS_JSON` 同风格） |
+| `ORIHOST_ACCOUNTS` | 空 | 帐号 JSON 数组（Actions 里建同名 Secret），值形如 `[{"email":"a@b.com","password":"pwd"}]`；同一份 JSON 粘进 `ORIHOST_EMAIL` 也认 |
+| `ORIHOST_EMAIL` / `ORIHOST_PASSWORD` | 空 | 兼容老写法：面板登录帐号密码（可带 `_1.._N` 后缀做多账号），本地跑常用 |
 | `ORIHOST_LOGIN_FILE` | `orihost_login.json` | 本地帐号文件路径 |
 | `ORIHOST_SERVER_IDS` | 空 | 服务器短 ID，逗号分隔；空则自动列账号下全部 |
 | `ORIHOST_PANEL` | `https://panel.orihost.com` | 面板地址 |

@@ -578,8 +578,11 @@ def remaining_days(expires_at: str):
 
 
 # ---------- 帐号解析 ----------
-def _split_ids(raw: str):
-    return [s.strip() for s in (raw or "").replace(";", ",").split(",") if s.strip()]
+def _split_ids(raw):
+    """服务器短 ID：接受逗号/分号分隔的字符串，也接受 JSON 里的数组"""
+    if isinstance(raw, (list, tuple)):
+        return [str(s).strip() for s in raw if str(s).strip()]
+    return [s.strip() for s in str(raw or "").replace(";", ",").split(",") if s.strip()]
 
 
 # 本地帐号文件（格式与 katabump 的 login.json 一致：[{"username","password","servers"?}]）
@@ -610,32 +613,61 @@ def load_accounts_file():
     return out
 
 
+def _parse_accounts_json(raw: str, src: str):
+    """把一条 JSON（数组，或单个对象）解析成帐号列表；失败打印原因并返回 []"""
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        print(f"⚠️ {src} 不是合法 JSON（{e}），跳过")
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        print("⚠️ " + src + " 应为 JSON 数组，形如 "
+              '[{"email":"a@b.com","password":"pwd"}]，跳过')
+        return []
+    out = []
+    for i, u in enumerate(data, 1):
+        if not isinstance(u, dict):
+            print(f"⚠️ {src} 第 {i} 项不是对象，跳过")
+            continue
+        email = (u.get("email") or u.get("username") or "").strip()
+        pwd = (u.get("password") or "").strip()
+        if not email or not pwd:
+            print(f"⚠️ {src} 第 {i} 项缺少帐号或密码，跳过")
+            continue
+        out.append({
+            "label": email,
+            "email": email,
+            "password": pwd,
+            "servers": _split_ids(u.get("servers", "")),
+        })
+    return out
+
+
+# 一条 JSON 数组同时给多个帐号，既认专用的 ORIHOST_ACCOUNTS，也认直接粘进
+# ORIHOST_EMAIL / ORIHOST_USERNAME 的同一份 JSON（老 Secret 改值就能用）。
+_JSON_ENVS = ("ORIHOST_ACCOUNTS", "ORIHOST_EMAIL", "ORIHOST_USERNAME")
+
+
 def load_accounts():
-    """优先 ORIHOST_ACCOUNTS（JSON）> ORIHOST_EMAIL/ORIHOST_PASSWORD（可带 _1.._N 后缀）> 本地 orihost_login.json"""
+    """优先 JSON（ORIHOST_ACCOUNTS，或粘在 ORIHOST_EMAIL 里的同一份 JSON）
+    > ORIHOST_EMAIL/ORIHOST_PASSWORD（可带 _1.._N 后缀）> 本地 orihost_login.json"""
     accounts = []
-    raw = (os.environ.get("ORIHOST_ACCOUNTS") or "").strip()
-    if raw:
-        try:
-            data = json.loads(raw)
-            for i, u in enumerate(data if isinstance(data, list) else [], 1):
-                email = (u.get("email") or u.get("username") or "").strip()
-                pwd = (u.get("password") or "").strip()
-                if not email or not pwd:
-                    print(f"⚠️ ORIHOST_ACCOUNTS 第 {i} 项缺少帐号或密码，跳过")
-                    continue
-                accounts.append({
-                    "label": email,
-                    "email": email,
-                    "password": pwd,
-                    "servers": _split_ids(u.get("servers", "")),
-                })
-        except Exception as e:
-            print(f"⚠️ ORIHOST_ACCOUNTS 解析失败（{e}），改用 ORIHOST_EMAIL/PASSWORD")
+    for name in _JSON_ENVS:
+        raw = (os.environ.get(name) or "").strip()
+        if not raw.startswith(("[", "{")):
+            continue
+        accounts = _parse_accounts_json(raw, name)
+        if accounts:
+            break
 
     if not accounts:
         for i in range(1, 20):
             suf = "" if i == 1 else f"_{i}"
             email = (os.environ.get(f"ORIHOST_EMAIL{suf}") or os.environ.get(f"ORIHOST_USERNAME{suf}") or "").strip()
+            if email.startswith(("[", "{")):
+                continue   # 是 JSON 写法但没解析成功（上面已打印原因），别当成邮箱
             pwd = os.environ.get(f"ORIHOST_PASSWORD{suf}") or ""
             ids = _split_ids(os.environ.get(f"ORIHOST_SERVER_IDS{suf}") or "")
             if not email and not pwd and not ids:
@@ -1383,9 +1415,9 @@ def main():
     print("#" * 46)
     accounts = load_accounts()
     if not accounts:
-        print("❌ 未配置帐号。请设置 ORIHOST_EMAIL + ORIHOST_PASSWORD"
-              "（或 ORIHOST_ACCOUNTS='[{\"email\":\"...\",\"password\":\"...\"}]'），"
-              "或在脚本同目录放一个 orihost_login.json")
+        print("❌ 未配置帐号。仓库 Secrets 里建一条 ORIHOST_ACCOUNTS（或直接把 JSON 粘进 ORIHOST_EMAIL），"
+              "值形如 '[{\"email\":\"a@b.com\",\"password\":\"pwd\"}]'（多账号就多列几个对象）；"
+              "本地也可设 ORIHOST_EMAIL + ORIHOST_PASSWORD，或在脚本同目录放一个 orihost_login.json")
         sys.exit(1)
     print(f"👤 帐号 {len(accounts)} 个")
 
@@ -1442,7 +1474,7 @@ def main():
                     if not servers:
                         servers = acc["servers"]
                     if not servers:
-                        print("  ⚠️ 帐号下没有服务器（也没配 ORIHOST_SERVER_IDS）")
+                        print("  ⚠️ 帐号下没有服务器（也没在 JSON 里配 \"servers\"）")
                         continue
                     print(f"🖥 待续期 {len(servers)} 台: {', '.join(short_id(s) for s in servers)}")
 

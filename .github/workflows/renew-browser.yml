@@ -51,22 +51,9 @@ jobs:
 
       - name: Run browser renew (xvfb)
         env:
-          # 帐号密码：单账号用不带后缀的；多账号加 _1 / _2 / _3 …
-          ORIHOST_EMAIL: ${{ secrets.ORIHOST_EMAIL }}
-          ORIHOST_PASSWORD: ${{ secrets.ORIHOST_PASSWORD }}
-          ORIHOST_EMAIL_1: ${{ secrets.ORIHOST_EMAIL_1 }}
-          ORIHOST_PASSWORD_1: ${{ secrets.ORIHOST_PASSWORD_1 }}
-          ORIHOST_EMAIL_2: ${{ secrets.ORIHOST_EMAIL_2 }}
-          ORIHOST_PASSWORD_2: ${{ secrets.ORIHOST_PASSWORD_2 }}
-          ORIHOST_EMAIL_3: ${{ secrets.ORIHOST_EMAIL_3 }}
-          ORIHOST_PASSWORD_3: ${{ secrets.ORIHOST_PASSWORD_3 }}
-          # 服务器短 ID（逗号分隔）。不填则自动续该账号下所有服务器
-          ORIHOST_SERVER_IDS: ${{ secrets.ORIHOST_SERVER_IDS }}
-          ORIHOST_SERVER_IDS_1: ${{ secrets.ORIHOST_SERVER_IDS_1 }}
-          ORIHOST_SERVER_IDS_2: ${{ secrets.ORIHOST_SERVER_IDS_2 }}
-          ORIHOST_SERVER_IDS_3: ${{ secrets.ORIHOST_SERVER_IDS_3 }}
-          # 也可用一条 JSON Secret 代替上面所有 EMAIL/PASSWORD：
-          # [{"email":"a@b.com","password":"pwd","servers":"id1,id2"}]
+          # 多账号一条 JSON Secret 搞定（替代原来的 ORIHOST_EMAIL / ORIHOST_PASSWORD 及 _1.._N 后缀）：
+          # [{"email":"a@b.com","password":"pwd"},{"email":"c@d.com","password":"pwd2"}]
+          # 只想续某账号的部分机器就加 "servers":"id1,id2"，不加则自动续该账号下全部服务器
           ORIHOST_ACCOUNTS: ${{ secrets.ORIHOST_ACCOUNTS }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
